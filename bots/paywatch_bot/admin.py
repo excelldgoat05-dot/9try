@@ -1,1 +1,1 @@
-# Additional admin handlers can be added here.
+# Additional admin handlers if needed
