@@ -1,1 +1,1 @@
-# Placeholder for ticket system integration
+# Ticket system integration placeholder
