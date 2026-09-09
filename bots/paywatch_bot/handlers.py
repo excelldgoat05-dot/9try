@@ -3,10 +3,11 @@ from aiogram.types import Message
 from aiogram.filters import Command
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.database import get_db
-from core.models import Wallet
-from core.enums import Chain, Asset
+from core.models import Wallet, PaymentSession
+from core.enums import SessionStatus, Chain, Asset
 from core.config import settings
-from core.logging import logger
+from sqlalchemy import select, func
+import datetime
 
 router = Router()
 
@@ -19,7 +20,6 @@ async def cmd_add_wallet(message: Message, db: AsyncSession = Depends(get_db)):
         await message.reply("Unauthorized")
         return
 
-    # Usage: /add_wallet <chain> <asset> <address> [token_contract]
     parts = message.text.split()
     if len(parts) < 4:
         await message.reply(
@@ -33,7 +33,6 @@ async def cmd_add_wallet(message: Message, db: AsyncSession = Depends(get_db)):
     address = parts[3]
     token_contract = parts[4] if len(parts) > 4 else None
 
-    # Validate chain and asset
     valid_chains = [c.value for c in Chain]
     valid_assets = [a.value for a in Asset]
     if chain not in valid_chains:
@@ -43,7 +42,6 @@ async def cmd_add_wallet(message: Message, db: AsyncSession = Depends(get_db)):
         await message.reply(f"Invalid asset. Valid: {', '.join(valid_assets)}")
         return
 
-    # Check if wallet already exists
     existing = await db.execute(
         select(Wallet).where(Wallet.chain == chain, Wallet.address == address)
     )
@@ -61,3 +59,39 @@ async def cmd_add_wallet(message: Message, db: AsyncSession = Depends(get_db)):
     db.add(wallet)
     await db.commit()
     await message.reply(f"Wallet added:\nChain: {chain}\nAsset: {asset}\nAddress: {address}")
+
+@router.message(Command("stats"))
+async def cmd_stats(message: Message, db: AsyncSession = Depends(get_db)):
+    if not is_admin(message.from_user.id):
+        await message.reply("Unauthorized")
+        return
+    total_sessions = await db.execute(select(func.count(PaymentSession.id)))
+    total_sessions = total_sessions.scalar()
+    completed = await db.execute(select(func.count(PaymentSession.id)).where(PaymentSession.status == SessionStatus.COMPLETED.value))
+    completed = completed.scalar()
+    total_received = await db.execute(select(func.sum(PaymentSession.received_amount)))
+    total_received = total_received.scalar() or 0
+
+    await message.answer(
+        f"Total sessions: {total_sessions}\n"
+        f"Completed: {completed}\n"
+        f"Total received (base units): {total_received}"
+    )
+
+@router.message(Command("review_late"))
+async def cmd_review_late(message: Message, db: AsyncSession = Depends(get_db)):
+    if not is_admin(message.from_user.id):
+        await message.reply("Unauthorized")
+        return
+    now = datetime.datetime.utcnow()
+    stmt = select(PaymentSession).where(
+        PaymentSession.status == SessionStatus.LATE_PAYMENT_REVIEW.value,
+        PaymentSession.received_amount > 0
+    )
+    result = await db.execute(stmt)
+    sessions = result.scalars().all()
+    if not sessions:
+        await message.reply("No late payment reviews pending.")
+        return
+    for s in sessions:
+        await message.answer(f"Session {s.id}, user {s.telegram_user_id}, received {s.received_amount} base units, expected {s.expected_amount}")
