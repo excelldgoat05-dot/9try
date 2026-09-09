@@ -1,1 +1,1 @@
-# Not used in this simple example, but can be added for menus.
+# Keyboards for adder bot (if any)
